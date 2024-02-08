@@ -11,6 +11,8 @@ import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
 import { MatButtonModule } from '@angular/material/button';
 import { MatMenuModule } from '@angular/material/menu';
 import { GALLERY_CONFIG, GalleryConfig, GalleryModule } from 'ng-gallery';
+import { RouterModule } from '@angular/router';
+import { HomeComponent } from './home/home.component';
 
 @NgModule({
   declarations: [
@@ -18,7 +20,8 @@ import { GALLERY_CONFIG, GalleryConfig, GalleryModule } from 'ng-gallery';
     HeaderComponent,
     FooterComponent,
     PopComponent,
-    EletronicComponent
+    EletronicComponent,
+    HomeComponent
   ],
   imports: [
     BrowserModule,
@@ -26,7 +29,8 @@ import { GALLERY_CONFIG, GalleryConfig, GalleryModule } from 'ng-gallery';
     BrowserAnimationsModule,
     MatButtonModule,
     MatMenuModule,
-    GalleryModule
+    GalleryModule,
+    RouterModule
   ],
   providers: 
   [
