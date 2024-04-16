@@ -1,0 +1,157 @@
+Description: >-
+  Create a angular website from S3 bucket using Gitlab runner.
+
+Parameters:
+  WebsiteName:
+    Description: Website name
+    Type: String
+
+  WebsiteDomain:
+    Description: Website domain.
+    Type: String
+
+  CloudFrontAccessIdentity:
+    Description: >
+      This is an AWS identity that allows CloudFront to access other restricted AWS resources.
+      It cannot be created by CloudFormation. Visit the following page and provide a name.
+      https://console.aws.amazon.com/cloudfront/home?#oai
+    Type: "String"
+
+  CloudFrontOriginPath:
+    Description: Path to serve files from in the S3 bucket
+    Type: "String"
+    Default: ""
+
+  CloudFrontPriceClass:
+    Description: >
+      Price Class dictates which global locations CloudFront will serve content from. See the
+      pricing page for more details. The cheapest is PriceClass_100 and serves US, Canada & EU
+    Type: "String"
+    Default: "PriceClass_100"
+
+  TlsCertificateArn:
+    Description: >
+      ARN for the HTTPS certificate covering the domain in WebsiteAddress. This object must be
+      created in eu-west-1 (Ireland), regardless of which region this CloudFormation template is launched.
+    Type: "String"
+
+  LoggingBucketName:
+    Description: >
+      Name for the logging bucket
+    Type: "String"
+
+  GlobalWAFARN:
+    Description: >
+      ARN for Global WAF
+    Type: "String"
+
+Resources:
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${LoggingBucketName}
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  ApplicationBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: "LoggingBucket"
+    Properties:
+      BucketName: !Sub ${WebsiteName}.${WebsiteDomain}
+      AccessControl: Private
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Sub ${LoggingBucketName}
+        LogFilePrefix: !Sub "${WebsiteName}.${WebsiteDomain}-logs/"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  ApplicationBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ApplicationBucket
+      PolicyDocument:
+        Statement:
+          - Sid: CloudFrontOriginAccess
+            Effect: Allow
+            Action:
+              - "s3:GetObject"
+              - "s3:PutObject"
+            Principal:
+              AWS:
+                !Join [
+                  "",
+                  [
+                    "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ",
+                    !Ref CloudFrontAccessIdentity,
+                  ],
+                ]
+            Resource: !Join ["", [!GetAtt [ApplicationBucket, Arn], "/*"]]
+
+  CFDistribution:
+    Type: "AWS::CloudFront::Distribution"
+    DependsOn: "ApplicationBucket"
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !Sub ${WebsiteName}.${WebsiteDomain}
+        Origins:
+          - DomainName: !GetAtt ApplicationBucket.DomainName
+            OriginPath: !Ref CloudFrontOriginPath
+            Id: !Sub ${WebsiteName}-Origin
+            S3OriginConfig:
+              OriginAccessIdentity:
+                !Join [
+                  "",
+                  [
+                    "origin-access-identity/cloudfront/",
+                    !Ref CloudFrontAccessIdentity,
+                  ],
+                ]
+        Logging:
+          Bucket: !Sub "${LoggingBucketName}.s3.amazonaws.com"
+          IncludeCookies: false
+        Comment: "Angular"
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          TargetOriginId: !Sub ${WebsiteName}-Origin
+          ForwardedValues:
+            QueryString: "false"
+            Cookies:
+              Forward: none
+          ViewerProtocolPolicy: redirect-to-https
+        CustomErrorResponses:
+          - ErrorCode: "400"
+            ResponsePagePath: "/index.html"
+            ResponseCode: "200"
+            ErrorCachingMinTTL: "300"
+          - ErrorCode: "403"
+            ResponsePagePath: "/index.html"
+            ResponseCode: "200"
+            ErrorCachingMinTTL: "300"
+        DefaultRootObject: index.html
+        Enabled: "true"
+        HttpVersion: "http2"
+        PriceClass: !Ref CloudFrontPriceClass
+        ViewerCertificate:
+          AcmCertificateArn: !Ref TlsCertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        WebACLId: !Sub ${GlobalWAFARN}

@@ -1,0 +1,129 @@
+variables:
+  STACK_NAME: "your_site_name-stack"
+  APP_PATH: $CI_PROJECT_DIR/angular
+  CLOUD_FRONT_ORIGIN_PATH: ""
+  CLOUD_FRONT_PRICE_CLASS: "your_priceclass"
+  AWS_REGION_DEFAULT: "your_region"
+  CLOUDFORMATION_FILENAME: "environment.yml"
+  AWS_DEPLOY_ROLE_NAME: "your_deploy_role_name"
+
+stages:
+  - dependencies
+  - package
+  - stack
+  - deploy
+  - invalidation
+
+.job_assume: &assume_role
+  - echo "${AWS_DEPLOY_ROLE_NAME}"
+  - assume --account ${AWS_ACCOUNT_ID} --role ${AWS_DEPLOY_ROLE_NAME} --profile assumed-profile
+  - export AWS_DEFAULT_PROFILE=assumed-profile
+  - export AWS_DEFAULT_REGION=sa-east-1
+
+.job_sync: &sync
+  - aws s3 sync --exclude index.html --delete dist s3://${WEBSITE_NAME}.${WEBSITE_DOMAIN} --metadata-directive COPY --cache-control 'max-age=302400'
+  - aws s3 sync dist s3://${WEBSITE_NAME}.${WEBSITE_DOMAIN} --metadata-directive REPLACE --cache-control max-age=0
+
+.job_invalidation: &invalidation
+  - DIST_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Origins.Items[?DomainName=='${WEBSITE_NAME}.${WEBSITE_DOMAIN}.s3.amazonaws.com']].{Id:Id}[0]" --output text)
+  - aws cloudfront create-invalidation --distribution-id "${DIST_ID}" --paths "/*"
+
+.job_template: &deploy_template
+  script:
+    - deploy
+      --account-id ${AWS_ACCOUNT_ID}
+      --template-file file://cloudformation//${CLOUDFORMATION_FILENAME}
+      --stack-name ${STACK_NAME}
+      --parameter WebsiteName=${WEBSITE_NAME}
+      --parameter WebsiteDomain=${WEBSITE_DOMAIN}
+      --parameter CloudFrontAccessIdentity=${CLOUD_FRONT_ACCESS_IDENTITY}
+      --parameter CloudFrontOriginPath=${CLOUD_FRONT_ORIGIN_PATH}
+      --parameter CloudFrontPriceClass=${CLOUD_FRONT_PRICE_CLASS}
+      --parameter TlsCertificateArn=${TLS_CERTIFICATE_ARN}
+      --parameter LoggingBucketName=${LOGGING_BUCKET_NAME}
+      --parameter GlobalWAFARN=${GLOBAL_WAF_ARN}
+      --role-name ${AWS_DEPLOY_ROLE_NAME}
+      --skip-default-tags
+      --tag Name="your_tag"
+      --region "your_region"
+
+NPM:
+  stage: dependencies
+  script:
+    - ng version
+    - npm --version
+    - cd ${APP_PATH}
+    - npm install
+  artifacts:
+    untracked: true
+    expire_in: 2 hrs
+  only:
+    - main
+
+Angular:
+  stage: package
+  script:
+    - cd ${APP_PATH}
+    - ng build --aot=true
+    - mv ${APP_PATH}/dist/ $CI_PROJECT_DIR
+  artifacts:
+    name: "$CI_JOB_NAME-$CI_COMMIT_REF_NAME"
+    paths:
+      - dist/
+    expire_in: 1 week
+  only:
+    - main
+
+CloudFormation:
+  variables:
+    AWS_ACCOUNT_ID: "your_account_id" 
+  stage: package
+  before_script:
+    - *assume_role
+  script:
+    - aws cloudformation validate-template --template-body file://cloudformation//${CLOUDFORMATION_FILENAME}
+  only:
+    - main
+
+Create:
+  variables:
+    AWS_ACCOUNT_ID: "your_account_id"
+    CLOUD_FRONT_ACCESS_IDENTITY: "your_cloudfrontID"
+    TLS_CERTIFICATE_ARN: "your_certificate_arn"
+    WEBSITE_DOMAIN: "your_site_domain"
+    WEBSITE_NAME: "your_site_name"
+    LOGGING_BUCKET_NAME: "your_site_name-frontend-logging"
+    GLOBAL_WAF_ARN: "your_waf_arn"
+  image: "your_image_repository"
+  stage: stack
+  <<: *deploy_template
+  only:
+    - main
+
+Sync-Files:
+  variables:
+    AWS_ACCOUNT_ID: "your_account_id" 
+    WEBSITE_DOMAIN: "your_site_domain"
+    WEBSITE_NAME: "your_site_name"
+  stage: deploy
+  before_script:
+    - *assume_role
+  script:
+    - *sync
+  when: manual
+  only:
+    - main
+
+Cache-Invalidation:
+  variables:
+    AWS_ACCOUNT_ID: "your_account_id" 
+    WEBSITE_DOMAIN: "your_site_domain"
+    WEBSITE_NAME: "your_site_name"
+  stage: invalidation
+  before_script:
+    - *assume_role
+  script:
+    - *invalidation
+  when: manual
+  only:
+    - main
